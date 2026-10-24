@@ -28,6 +28,10 @@ const WORKDIR = process.env.AGENTD_WORKDIR || path.resolve(HERE, '..');
 const PORT = Number(process.env.AGENTD_PORT || '43199');
 const PLUGIN_PORT = Number(process.env.AGENTD_PLUGIN_PORT || '43198');
 const PLUGIN_TIMEOUT_MS = Number(process.env.AGENTD_PLUGIN_TIMEOUT || '200000');
+// A wedged plugin accepts connections and never answers, which used to surface
+// only after the full turn timeout. One cheap ping up front turns a two-minute
+// silent wait into an immediate, actionable message.
+const PLUGIN_PROBE_MS = Number(process.env.AGENTD_PLUGIN_PROBE || '5000');
 
 const ANSWER_FILE = path.join(TMP, 'agentd-answer.txt');
 const LOG_FILE = path.join(TMP, 'agentd.log');
@@ -130,7 +134,8 @@ function markPrefixSent(sessionId) {
 }
 
 /** Send one JSON line to the in-app plugin and return its parsed reply. */
-function askPlugin(request) {
+function askPlugin(request, timeoutMs) {
+  const limit = Number(timeoutMs) > 0 ? Number(timeoutMs) : PLUGIN_TIMEOUT_MS;
   return new Promise((resolve, reject) => {
     const socket = net.connect(PLUGIN_PORT, '127.0.0.1');
     let buffer = '';
@@ -150,11 +155,8 @@ function askPlugin(request) {
     };
 
     const timer = setTimeout(
-      () =>
-        finish(
-          new Error('voice-turn plugin did not answer in ' + String(PLUGIN_TIMEOUT_MS) + ' ms'),
-        ),
-      PLUGIN_TIMEOUT_MS,
+      () => finish(new Error('voice-turn plugin did not answer in ' + String(limit) + ' ms')),
+      limit,
     );
 
     socket.setEncoding('utf8');
@@ -227,6 +229,17 @@ const server = net.createServer((socket) => {
       const request = { text: needsPrefix ? VOICE_PREFIX + question : question };
       if (fresh) request.new = true;
       else request.sessionId = sessionId;
+
+      // Fail fast when the plugin accepts connections but stopped answering:
+      // without this the caller waits for the whole turn timeout in silence.
+      try {
+        await askPlugin({ ping: true }, PLUGIN_PROBE_MS);
+      } catch (error) {
+        const message = String((error && error.message) || error).replace(/\s+/g, ' ');
+        log('plugin probe failed: ' + message);
+        reply('err DSH plugin is not answering (' + message + '): restart DSH Desktop');
+        return;
+      }
 
       let result;
       try {

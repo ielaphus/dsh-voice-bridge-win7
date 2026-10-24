@@ -18,7 +18,15 @@
 //   {"text": "...", "new": true}         -> creates a session in the configured
 //                                          workspace first, then answers
 //   {"text": "..."}                      -> asks the app for the last session
+//   {"ping": true}                       -> health check, no model turn
 //   failure                              -> {"ok": false, "error": "..."}
+//
+// Requests are handled strictly one at a time (the app writes turns in order),
+// and one bad request must never take the endpoint down: every queued step is
+// wrapped in try/catch, the queue is re-armed after a failure, and every turn
+// has a hard deadline. (Version 1 of this file died for good after a `ping`:
+// the reply has no `answer` field, reading `.length` of it threw, and the
+// rejected queue silently swallowed every later request.)
 import net from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -32,6 +40,8 @@ const DEFAULT_TIMEOUT_MS = 180000;
 const DEFAULT_WORKSPACE_PATH = '';
 const DEFAULT_LOG_FILE = '';
 const MAX_ANSWER_BYTES = 8000;
+/** Extra slack on top of the turn timeout before the queue gives up on a turn. */
+const DEADLINE_SLACK_MS = 15000;
 
 /** Collect the human-visible text blocks of one assistant message event. */
 function assistantTextOf(event) {
@@ -48,6 +58,24 @@ function assistantTextOf(event) {
 function brief(error) {
   const stack = String((error && error.stack) || (error && error.message) || error);
   return stack.split('\n').slice(0, 4).join(' | ').slice(0, 600);
+}
+
+/** Resolve `work`, but never wait longer than `ms` — a stuck turn cannot pin the queue. */
+function withDeadline(work, ms) {
+  let timer;
+  const deadline = new Promise((resolve) => {
+    timer = setTimeout(() => resolve({ ok: false, error: 'deadline after ' + String(ms) + ' ms' }), ms);
+  });
+  return Promise.race([work, deadline]).then(
+    (value) => {
+      clearTimeout(timer);
+      return value;
+    },
+    (error) => {
+      clearTimeout(timer);
+      return { ok: false, error: brief(error) };
+    },
+  );
 }
 
 export function apply(ctx, config) {
@@ -203,7 +231,13 @@ export function apply(ctx, config) {
     // without spending a model turn.
     if (request && request.ping === true) {
       const gateway = ctx.get('typertGateway');
-      return { ok: true, pong: true, gateway: gateway !== undefined, sessionId: workspaceId() };
+      return {
+        ok: true,
+        pong: true,
+        answer: '',
+        gateway: gateway !== undefined,
+        sessionId: workspaceId(),
+      };
     }
 
     const text = String((request && request.text) || '');
@@ -217,6 +251,20 @@ export function apply(ctx, config) {
     return { ...result, sessionId };
   };
 
+  /** One request, start to finish: never throws, always yields a reply payload. */
+  const answerOne = async (raw) => {
+    let payload;
+    try {
+      payload = await withDeadline(handle(raw), timeoutMs + DEADLINE_SLACK_MS);
+    } catch (error) {
+      payload = { ok: false, error: brief(error) };
+    }
+    if (payload === undefined || payload === null || typeof payload !== 'object') {
+      payload = { ok: false, error: 'turn produced no payload' };
+    }
+    return payload;
+  };
+
   const server = net.createServer((socket) => {
     socket.setEncoding('utf8');
     let buffer = '';
@@ -224,8 +272,14 @@ export function apply(ctx, config) {
     const reply = (payload) => {
       if (replied) return;
       replied = true;
+      let line;
       try {
-        socket.end(JSON.stringify(payload) + '\n');
+        line = JSON.stringify(payload);
+      } catch (e) {
+        line = JSON.stringify({ ok: false, error: 'reply is not serializable' });
+      }
+      try {
+        socket.end(line + '\n');
       } catch (e) {
         /* ignore */
       }
@@ -238,20 +292,30 @@ export function apply(ctx, config) {
       const raw = buffer.slice(0, index).trim();
       buffer = buffer.slice(index + 1);
 
+      // The chain is re-armed on both outcomes: a rejected step must not stop
+      // the endpoint from answering every later request.
       queue = queue.then(async () => {
         let payload;
         try {
-          payload = await handle(raw);
+          payload = await answerOne(raw);
         } catch (error) {
           log('turn crashed: ' + brief(error));
           payload = { ok: false, error: brief(error) };
         }
-        if (payload.ok === true) {
-          log('turn answered chars=' + String(payload.answer.length) + ' session=' + String(payload.sessionId));
-        } else {
-          log('turn failed: ' + String(payload.error));
+        try {
+          if (payload.ok === true) {
+            const chars = typeof payload.answer === 'string' ? payload.answer.length : 0;
+            log('turn answered chars=' + String(chars) + ' session=' + String(payload.sessionId));
+          } else {
+            log('turn failed: ' + String(payload.error));
+          }
+        } catch (error) {
+          log('log line failed: ' + brief(error));
         }
         reply(payload);
+      });
+      queue = queue.catch((error) => {
+        log('queue error: ' + brief(error));
       });
     });
     socket.on('error', () => {

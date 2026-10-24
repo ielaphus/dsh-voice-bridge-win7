@@ -1,0 +1,28 @@
+# Third-party components
+
+This repository ships **source code only**. Nothing third-party is redistributed here: no
+binaries, no speech models, no voice data. To run the bridge you install the components below
+yourself, and each keeps its own license and terms.
+
+| Component | Used for | License | Where from |
+| --- | --- | --- | --- |
+| **Vosk** (`libvosk.dll`) | offline speech recognition | Apache-2.0 | `alphacep/vosk-api` releases |
+| **Vosk models** (`vosk-model-small-ru-0.22`, optional English model) | acoustic model + dictionary | Apache-2.0 (per the model's own page) | models page of alphacephei.com / Vosk |
+| **RHVoice** engine (`RHVoice.dll`) | speech synthesis | **GPL-3.0** (`gpl-3.0.txt` ships inside the engine package) | `RHVoice/RHVoice` releases |
+| **RHVoice voices** (Anna, Elena, Irina, Aleksandr, Alan, …) | voice data | **GPL-3.0** for the voices used here (each voice package states its own license, e.g. `data/README.md`) | separate voice packages from the RHVoice project |
+| **DeepSeek Harness** (DSH) | the app the bridge talks to; the plugin uses its public plugin API | as published by its authors | DSH distribution |
+| Windows `winmm`, `user32`, `kernel32` | recording, hotkeys, console window | system components, not redistributed | Windows |
+
+## Why the binaries are not in the repo
+
+* **Size**: the model is ~46 MB, `libvosk` ~26 MB, engine plus four voices ~157 MB. A git
+  repository of that size is painful to clone and hits hosting limits (GitHub rejects single
+  files over 100 MB and warns above 1 GB per repository).
+* **Licensing**: RHVoice is GPL-3.0. Redistributing it here would drag GPL obligations into the
+  repository and into anyone who mirrors it. Keeping it a separate, user-installed dependency
+  keeps this project's MIT license clean and keeps attribution where it belongs.
+
+## Trademarks
+
+"Vosk", "RHVoice", "DeepSeek", "Windows" and other names belong to their owners. They are used
+here only to describe what the code talks to; no affiliation or endorsement is implied.

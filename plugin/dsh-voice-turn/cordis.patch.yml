@@ -1,0 +1,12 @@
+# dsh-voice-turn — bundle patch: insert the plugin row.
+#
+# The row is what makes DSH accept a spoken question over loopback and write the
+# turn into a live session itself (see index.js). Tokens stay defaulted here so
+# the package can be dropped into a profile as a bundle.
+- insert:
+    - id: voice-turn
+      name: 'dsh-voice-turn'
+      config:
+        port: 43198
+        # EDIT ME: the folder your DSH workspace uses
+        workspacePath: 'C:\Users\You\sandbox'

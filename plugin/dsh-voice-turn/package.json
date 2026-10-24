@@ -1,0 +1,18 @@
+{
+  "name": "dsh-voice-turn",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Loopback endpoint that admits a spoken question into a live DSH session, so the app itself writes the turn.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

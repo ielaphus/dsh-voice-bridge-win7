@@ -1,0 +1,15 @@
+# installed assets (large, licensed separately) — never commit
+bin/
+
+# runtime state
+tmp/
+*.wav
+*.log
+*.pid
+*.build
+agentd-session.txt
+agentd-prefixed.txt
+
+# secrets and local machine files
+*.token
+.gh-token
